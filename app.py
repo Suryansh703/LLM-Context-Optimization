@@ -12,8 +12,6 @@ compressed_memory = ""
 
 THRESHOLD = 6
 
-
-# 🔹 Compress memory
 def compress_memory():
     global conversation, compressed_memory
 
