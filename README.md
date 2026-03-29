@@ -6,7 +6,7 @@ An intelligent system that optimizes Large Language Model (LLM) context by dynam
 ---
 
 ## 🛠 Tech Stack
-Python, LangChain, Google Gemini API, Prompt Engineering, Memory Management, JSON Storage (optional)
+Python, LangChain, Google Gemini API, Prompt Engineering, Memory Management, Vector DB storage
 
 ---
 
