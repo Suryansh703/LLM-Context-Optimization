@@ -2,12 +2,11 @@ import os
 from dotenv import load_dotenv
 from google import genai
 
-# Load API key
+
 load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Memory
 conversation = []
 compressed_memory = ""
 
@@ -19,7 +18,7 @@ def compress_memory():
     global conversation, compressed_memory
 
     prompt = f"""
-    Summarize the following conversation.
+    Summarise the following conversation.
     Keep only important facts, user preferences, and key details.
 
     Conversation:
@@ -40,7 +39,7 @@ def compress_memory():
         print("Compression Error:", e)
 
 
-# 🔹 Chat function
+
 def chat(user_input):
     global conversation, compressed_memory
 
@@ -76,7 +75,7 @@ def chat(user_input):
     return reply
 
 
-# 🔹 Run chatbot
+
 print("Smart Chatbot Started 🚀 (type 'exit' to quit)\n")
 
 while True:
