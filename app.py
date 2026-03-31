@@ -1,80 +1,39 @@
 import os
 from dotenv import load_dotenv
-from google import genai
 
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableSequence
 
+# Load env
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+api_key = os.getenv("GEMINI_API_KEY")
 
-conversation = []
-compressed_memory = ""
+# LLM
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    google_api_key=api_key
+)
 
-THRESHOLD = 6
+# Prompt template
+prompt = ChatPromptTemplate.from_template("""
+You are a smart and helpful assistant. Answer the user's question based on the conversation history.
 
-def compress_memory():
-    global conversation, compressed_memory
+Conversation:
+{history}
 
-    prompt = f"""
-    Summarise the following conversation.
-    Keep only important facts, user preferences, and key details.
+User: {input}
+AI:
+""")
 
-    Conversation:
-    {conversation}
-    """
+# Memory (manual for now)
+chat_history = ""
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt
-        )
-        summary = response.text
+# Chain (modern LangChain)
+chain = prompt | llm
 
-        compressed_memory += "\n" + summary
-        conversation = []
-
-    except Exception as e:
-        print("Compression Error:", e)
-
-
-
-def chat(user_input):
-    global conversation, compressed_memory
-
-    conversation.append(f"User: {user_input}")
-
-    if len(conversation) > THRESHOLD:
-        compress_memory()
-
-    final_prompt = f"""
-    Previous important memory:
-    {compressed_memory}
-
-    Recent conversation:
-    {conversation}
-
-    Answer the user properly.
-    """
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=final_prompt
-        )
-
-        reply = response.text
-
-    except Exception as e:
-        print("Error:", e)
-        return "⚠️ API error. Try again later."
-
-    conversation.append(f"Bot: {reply}")
-
-    return reply
-
-
-
-print("Smart Chatbot Started 🚀 (type 'exit' to quit)\n")
+print("🚀 AI Chatbot Started (type 'exit' to quit)")
 
 while True:
     user_input = input("You: ")
@@ -82,5 +41,17 @@ while True:
     if user_input.lower() == "exit":
         break
 
-    reply = chat(user_input)
-    print("Bot:", reply)
+    try:
+        response = chain.invoke({
+            "history": chat_history,
+            "input": user_input
+        })
+
+        reply = response.content
+        print("Bot:", reply)
+
+        # Update memory
+        chat_history += f"\nUser: {user_input}\nAI: {reply}"
+
+    except Exception as e:
+        print("⚠️ Error:", e)
