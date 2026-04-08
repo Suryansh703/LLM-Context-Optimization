@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableSequence
+from memory_compression import should_compress, compress_memory, build_history
 
 # Load env
 load_dotenv()
@@ -18,7 +19,7 @@ llm = ChatGoogleGenerativeAI(
 
 # Prompt template
 prompt = ChatPromptTemplate.from_template("""
-You are a smart and helpful assistant. Answer the user's question based on the conversation history.
+ You are a smart and helpful assistant. Answer the user's question based on the conversation history.
 
 Conversation:
 {history}
@@ -37,13 +38,14 @@ print("🚀 AI Chatbot Started (type 'exit' to quit)")
 
 while True:
     user_input = input("You: ")
-
+    if should_compress():
+     compress_memory()
     if user_input.lower() == "exit":
         break
 
     try:
         response = chain.invoke({
-            "history": chat_history,
+            "history": build_history(),
             "input": user_input
         })
 
