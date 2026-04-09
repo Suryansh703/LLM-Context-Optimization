@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableSequence
-from memory_compression import should_compress, compress_memory, build_history
+from memory_compression import should_compress, compress_memory, build_history, update_memory
 
 # Load env
 load_dotenv()
@@ -28,9 +28,6 @@ User: {input}
 AI:
 """)
 
-# Memory (manual for now)
-chat_history = ""
-
 # Chain (modern LangChain)
 chain = prompt | llm
 
@@ -38,8 +35,6 @@ print("🚀 AI Chatbot Started (type 'exit' to quit)")
 
 while True:
     user_input = input("You: ")
-    if should_compress():
-     compress_memory()
     if user_input.lower() == "exit":
         break
 
@@ -53,7 +48,8 @@ while True:
         print("Bot:", reply)
 
         # Update memory
-        chat_history += f"\nUser: {user_input}\nAI: {reply}"
-
+        update_memory(user_input, reply)
+        if should_compress():
+            compress_memory()
     except Exception as e:
         print("⚠️ Error:", e)

@@ -1,104 +1,120 @@
-import os
-import re
-import json
-from dotenv import load_dotenv
+# memory_compression.py
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
+# -------------------------------
+# GLOBAL MEMORY STRUCTURES
+# -------------------------------
 
-load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+short_term_memory = []   # recent chat (list of messages)
+long_term_memory = ""    # compressed summary (string)
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=api_key
-)
+# -------------------------------
+# CONFIG
+# -------------------------------
 
-compression_prompt = ChatPromptTemplate.from_template("""
-You are a memory compression engine for an AI assistant.
-Compress the conversation below into a structured summary.
-
-RULES:
-- KEEP: facts, decisions, user preferences, goals, named entities, tasks
-- DISCARD: greetings, filler, repetition, small talk
-
-CONVERSATION:
-{conversation}
-
-Return ONLY a JSON object, no markdown, no explanation:
-{{
-  "summary": "2-3 sentence overview",
-  "facts": ["fact1", "fact2"],
-  "decisions": ["decision1"],
-  "user_preferences": ["pref1"],
-  "key_entities": ["entity1"]
-}}
-""")
-
-compression_chain = compression_prompt | llm
-
-chat_history      = ""
-compressed_blocks = []
-THRESHOLD         = 6
-ANCHOR_LINES      = 4
+MAX_STM = 6                 # number of recent messages to keep
+TOKEN_LIMIT = 1500          # threshold for compression
 
 
-def should_compress() -> bool:
-    return chat_history.count("User:") >= THRESHOLD
+# TOKEN COUNT 
+
+def count_tokens(text):
+    if not text:
+        return 0
+    return len(text.split())   
+
+# IMPORTANCE CHECK (Optional Enhancement)
+
+
+IMPORTANT_KEYWORDS = ["name", "project", "goal", "interest"]
+
+def is_important(text):
+    return any(word in text.lower() for word in IMPORTANT_KEYWORDS)
+
+
+
+# SHOULD COMPRESS (KEEP SAME NAME)
+
+
+def should_compress():
+    global long_term_memory
+    return count_tokens(long_term_memory) > TOKEN_LIMIT
+
+
+
+# COMPRESS MEMORY (LLM-BASED)
 
 
 def compress_memory():
-    global chat_history, compressed_blocks
+    global long_term_memory
 
-    print(f"\n[Compression] Compressing {chat_history.count('User:')} turns...")
+    if not long_term_memory.strip():
+        return
 
     try:
-        response = compression_chain.invoke({"conversation": chat_history})
-        raw      = response.content
-        cleaned  = re.sub(r"```(?:json)?|```", "", raw).strip()
-        summary  = json.loads(cleaned)
-        compressed_blocks.append(summary)
-        print(f"[Compression] Done. Total summaries: {len(compressed_blocks)}")
+        # Lazy import to avoid circular dependency
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        import os
+
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=os.getenv("GEMINI_API_KEY")
+        )
+
+        summary_prompt = f"""
+        Summarize the following conversation.
+        Keep:
+        - Important facts
+        - User preferences
+        - Goals
+        Remove unnecessary repetition.
+
+        Conversation:
+        {long_term_memory}
+        """
+
+        response = llm.invoke(summary_prompt)
+        long_term_memory = response.content.strip()
 
     except Exception as e:
-        print(f"[Compression] Failed: {e}")
-        compressed_blocks.append({
-            "summary": chat_history,
-            "facts": [], "decisions": [],
-            "user_preferences": [], "key_entities": []
-        })
-
-    lines        = chat_history.strip().split("\n")
-    chat_history = "\n".join(lines[-ANCHOR_LINES:])
-    print(f"[Compression] Pruned. Kept last {ANCHOR_LINES} lines.\n")
+        print("⚠️ Compression Error:", e)
 
 
-def format_compressed_memory() -> str:
-    if not compressed_blocks:
-        return ""
 
-    blocks = []
-    for i, mem in enumerate(compressed_blocks, 1):
-        lines = [f"[Past Context {i}]"]
-        if mem.get("summary"):
-            lines.append(f"Summary    : {mem['summary']}")
-        if mem.get("facts"):
-            lines.append("Facts      : " + " | ".join(mem["facts"]))
-        if mem.get("decisions"):
-            lines.append("Decisions  : " + " | ".join(mem["decisions"]))
-        if mem.get("user_preferences"):
-            lines.append("Preferences: " + " | ".join(mem["user_preferences"]))
-        if mem.get("key_entities"):
-            lines.append("Entities   : " + ", ".join(mem["key_entities"]))
-        blocks.append("\n".join(lines))
-
-    return "\n\n".join(blocks)
+# UPDATE MEMORY (HELPER FUNCTION)
 
 
-def build_history() -> str:
-    past   = format_compressed_memory()
-    recent = chat_history.strip()
+def update_memory(user_input, ai_output):
+    global short_term_memory, long_term_memory
 
-    if past and recent:
-        return f"{past}\n\n--- Recent Conversation ---\n{recent}"
-    return past or recent
+    # Add new messages to STM
+    short_term_memory.append(f"User: {user_input}")
+    short_term_memory.append(f"AI: {ai_output}")
+
+    # If STM exceeds limit → move old messages to LTM
+    if len(short_term_memory) > MAX_STM:
+        overflow = short_term_memory[:-MAX_STM]
+
+        # Add overflow to long-term memory
+        long_term_memory += "\n" + "\n".join(overflow)
+
+        # Keep only recent messages
+        short_term_memory = short_term_memory[-MAX_STM:]
+
+
+
+# BUILD HISTORY (USED IN MAIN CODE)
+
+
+def build_history():
+    global short_term_memory, long_term_memory
+
+    history = ""
+
+    if long_term_memory.strip():
+        history += f"Long Term Memory:\n{long_term_memory}\n\n"
+
+    if short_term_memory:
+        history += "Recent Conversation:\n"
+        history += "\n".join(short_term_memory)
+
+    return history.strip()
