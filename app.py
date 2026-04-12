@@ -19,14 +19,21 @@ llm = ChatGoogleGenerativeAI(
 
 # Prompt template
 prompt = ChatPromptTemplate.from_template("""
- You are a smart and helpful assistant. Answer the user's question based on the conversation history.
+You are an AI assistant with memory.
 
-Conversation:
+
+- You MUST use the provided conversation history.
+- If the user has shared personal information (like name, preferences, etc.), you MUST remember and use it.
+- DO NOT say "I don't remember" or "I don't have memory".
+- Always check history before answering.
+
+Conversation History:
 {history}
 
 User: {input}
 AI:
 """)
+
 
 # Chain (modern LangChain)
 chain = prompt | llm
@@ -40,7 +47,7 @@ while True:
 
     try:
         response = chain.invoke({
-            "history": build_history(),
+            "history": build_history(user_input),
             "input": user_input
         })
 

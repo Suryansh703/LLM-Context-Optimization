@@ -1,133 +1,115 @@
 import os
-import datetime
+import json
+import uuid
+import numpy as np
+import faiss
+from pathlib import Path
 from dotenv import load_dotenv
+import google.generativeai as genai
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-
-# Load env
 load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-api_key = os.getenv("GEMINI_API_KEY")
+EMBEDDING_MODEL = "models/text-embedding-004"
+EMBEDDING_DIM   = 768
+TOP_K           = 3
+STORE_DIR       = Path("./faiss_store")
+INDEX_FILE      = STORE_DIR / "index.bin"
+META_FILE       = STORE_DIR / "metadata.json"
 
-# LLM
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=api_key
-)
-
-# Embedding model
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
-
-# Vector DB
-vector_store = FAISS.from_texts(
-    ["Initial memory"],
-    embedding=embeddings
-)
-
-# Prompt
-prompt = ChatPromptTemplate.from_template("""
-You are a smart AI assistant.
-
-Important memory:
-{memory}
-
-Recent conversation:
-{history}
-
-User: {input}
-AI:
-""")
-
-chain = prompt | llm
-
-# memory
-chat_history = ""
-compressed_memory = ""
-
-THRESHOLD = 6
+STORE_DIR.mkdir(exist_ok=True)
 
 
-def get_current_date():
-    return datetime.datetime.now().strftime("%A, %d %B %Y")
+def _load_index():
+    if INDEX_FILE.exists():
+        return faiss.read_index(str(INDEX_FILE))
+    return faiss.IndexFlatL2(EMBEDDING_DIM)
 
 
-def compress_memory():
+def _load_meta():
+    if META_FILE.exists():
+        with open(META_FILE) as f:
+            return json.load(f)
+    return {"id_map": [], "entries": {}}
 
-    global chat_history, compressed_memory
 
-    compression_prompt = f"""
-    Summarize conversation into key bullet points.
+def _save(index, meta):
+    faiss.write_index(index, str(INDEX_FILE))
+    with open(META_FILE, "w") as f:
+        json.dump(meta, f, indent=2)
 
-    Conversation:
-    {chat_history}
+
+def _embed(text: str):
+    try:
+        result = genai.embed_content(
+            model=EMBEDDING_MODEL,
+            content=text,
+            task_type="retrieval_document"
+        )
+        return result["embedding"]
+    except Exception as e:
+        print(f"[VectorStore] Embedding failed: {e}")
+        return None
+
+
+def store_summary(summary_text: str):
     """
+    Call this after compress_memory() runs.
+    Embeds the compressed summary and stores it in FAISS.
+    """
+    if not summary_text.strip():
+        return
 
-    response = llm.invoke(compression_prompt)
+    index     = _load_index()
+    meta      = _load_meta()
+    embedding = _embed(summary_text)
 
-    summary = response.content
+    if embedding is None:
+        return
 
-    compressed_memory += "\n" + summary
+    mem_id = str(uuid.uuid4())
+    vector = np.array([embedding], dtype=np.float32)
 
-    chat_history = ""
+    index.add(vector)
+    meta["id_map"].append(mem_id)
+    meta["entries"][mem_id] = {
+        "id":      mem_id,
+        "summary": summary_text
+    }
 
-
-def store_memory(text):
-
-    vector_store.add_texts([text])
-
-
-def retrieve_memory(query):
-
-    docs = vector_store.similarity_search(query, k=2)
-
-    return "\n".join([doc.page_content for doc in docs])
+    _save(index, meta)
+    print(f"[VectorStore] Summary stored. Total in DB: {index.ntotal}")
 
 
-print("🚀 FAISS Memory Chatbot Started")
+def retrieve_relevant(query: str) -> str:
+    """
+    Call this in build_history() to get relevant past summaries.
+    Returns a formatted string ready to inject into the prompt.
+    """
+    index = _load_index()
+    meta  = _load_meta()
 
-while True:
+    if index.ntotal == 0:
+        return ""
 
-    user_input = input("\nYou: ")
+    embedding = _embed(query)
+    if embedding is None:
+        return ""
 
-    if user_input.lower() == "exit":
-        break
+    k            = min(TOP_K, index.ntotal)
+    query_vector = np.array([embedding], dtype=np.float32)
+    _, indices   = index.search(query_vector, k)
 
-    # tool: date
-    if "date" in user_input.lower():
+    blocks = []
+    for i, idx in enumerate(indices[0], 1):
+        if idx == -1:
+            continue
+        mem_id = meta["id_map"][idx]
+        entry  = meta["entries"].get(mem_id)
+        if entry:
+            blocks.append(f"[Retrieved Memory {i}]\n{entry['summary']}")
 
-        reply = f"Today's date is {get_current_date()}"
-
-    else:
-
-        # compress long conversation
-        if len(chat_history.split("\n")) > THRESHOLD:
-
-            compress_memory()
-
-        # retrieve relevant vector memory
-        vector_memory = retrieve_memory(user_input)
-
-        response = chain.invoke({
-
-            "memory": compressed_memory + "\n" + vector_memory,
-
-            "history": chat_history,
-
-            "input": user_input
-
-        })
-
-        reply = response.content
-
-    print("Bot:", reply)
-
-    # update memory
-    chat_history += f"\nUser: {user_input}\nAI: {reply}"
-
-    store_memory(f"User: {user_input} AI: {reply}")
+    result = "\n\n".join(blocks)
+    if result:
+        print(f"[VectorStore] Retrieved {len(blocks)} relevant memories.")
+    return result
