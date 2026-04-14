@@ -6,71 +6,98 @@ from Faiss import store_summary, retrieve_relevant
 
 load_dotenv()
 
-# ── Persistent storage ──
+# ── Storage ──
 MEMORY_FILE = Path("./memory_store/session_memory.json")
 MEMORY_FILE.parent.mkdir(exist_ok=True)
 
 # ── Config ──
-MAX_STM            = 6
-TOKEN_LIMIT        = 1500
-IMPORTANT_KEYWORDS = ["name", "project", "goal", "interest"]
+MAX_STM = 6
+TOKEN_LIMIT = 1500
 
-# ── Memory state ──
+# ── Memory ──
 short_term_memory = []
-long_term_memory  = ""
 
+long_term_memory = {
+    "facts": [],
+    "preferences": [],
+    "goals": [],
+    "summary": ""
+}
 
-# ─────────────────────────────────────────────
-# LOAD & SAVE
-# ─────────────────────────────────────────────
+# ------------------------
+# LOAD / SAVE
+# ------------------------
 
 def load_memory():
     global short_term_memory, long_term_memory
+
     if MEMORY_FILE.exists():
         with open(MEMORY_FILE) as f:
-            data              = json.load(f)
+            data = json.load(f)
+
             short_term_memory = data.get("short_term_memory", [])
-            long_term_memory  = data.get("long_term_memory", "")
-        print(f"[Memory] Loaded — STM: {len(short_term_memory)} messages | LTM: {count_tokens(long_term_memory)} tokens")
+
+            long_term_memory = data.get("long_term_memory", {
+                "facts": [],
+                "preferences": [],
+                "goals": [],
+                "summary": ""
+            })
+
+        print(f"[Memory] Loaded | STM: {len(short_term_memory)}")
+
     else:
-        print("[Memory] No saved memory found. Starting fresh.")
+        print("[Memory] Starting fresh.")
 
 
 def save_memory():
     with open(MEMORY_FILE, "w") as f:
         json.dump({
             "short_term_memory": short_term_memory,
-            "long_term_memory":  long_term_memory
+            "long_term_memory": long_term_memory
         }, f, indent=2)
 
 
-# ─────────────────────────────────────────────
+# ------------------------
 # HELPERS
-# ─────────────────────────────────────────────
+# ------------------------
 
-def count_tokens(text):
-    if not text:
-        return 0
-    return len(text.split())
+def count_ltm_tokens():
+    return len(json.dumps(long_term_memory).split())
 
 
-def is_important(text):
-    return any(word in text.lower() for word in IMPORTANT_KEYWORDS)
+def classify_memory(text):
+    text = text.lower()
+
+    if any(x in text for x in ["my name", "i am", "i'm"]):
+        return "facts"
+
+    elif any(x in text for x in ["i like", "i love", "i prefer"]):
+        return "preferences"
+
+    elif any(x in text for x in ["my goal", "i want", "i aim"]):
+        return "goals"
+
+    return "noise"
 
 
-# ─────────────────────────────────────────────
+def get_archived_insights(query):
+    try:
+        return retrieve_relevant(query)
+    except:
+        return ""
+
+
+# ------------------------
 # COMPRESSION
-# ─────────────────────────────────────────────
+# ------------------------
 
 def should_compress():
-    return count_tokens(long_term_memory) > TOKEN_LIMIT
+    return count_ltm_tokens() > TOKEN_LIMIT
 
 
 def compress_memory():
     global long_term_memory
-
-    if not long_term_memory.strip():
-        return
 
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -80,75 +107,109 @@ def compress_memory():
             google_api_key=os.getenv("GEMINI_API_KEY")
         )
 
-        summary_prompt = f"""
-        Summarize the following conversation.
-        Keep:
-        - Important facts
-        - User preferences
-        - Goals
-        Remove unnecessary repetition.
+        prompt = f"""
+You are compressing conversational memory.
 
-        Conversation:
-        {long_term_memory}
-        """
+Extract ONLY long-term useful information.
 
-        response         = llm.invoke(summary_prompt)
-        compressed       = response.content.strip()
-        long_term_memory = compressed
+Keep:
+- Stable user facts
+- Preferences
+- Goals
 
-        store_summary(compressed)
+Remove:
+- Repetition
+- Temporary chat
+- Greetings
+
+Output STRICT JSON:
+{{
+    "facts": [],
+    "preferences": [],
+    "goals": [],
+    "summary": "short abstract memory"
+}}
+
+Input Memory:
+{json.dumps(long_term_memory)}
+"""
+
+        response = llm.invoke(prompt)
+
+        compressed = json.loads(response.content)
+
+        # Merge (NOT overwrite)
+        long_term_memory["facts"] = list(set(long_term_memory["facts"] + compressed["facts"]))
+        long_term_memory["preferences"] = list(set(long_term_memory["preferences"] + compressed["preferences"]))
+        long_term_memory["goals"] = list(set(long_term_memory["goals"] + compressed["goals"]))
+
+        long_term_memory["summary"] += "\n" + compressed["summary"]
+
+        # Store snapshot in FAISS
+        store_summary(json.dumps(long_term_memory))
+
         save_memory()
 
-        print("[Memory] Compression done and saved.")
+        print("[Memory] Compression complete.")
 
     except Exception as e:
         print("⚠️ Compression Error:", e)
 
 
-# ─────────────────────────────────────────────
+# ------------------------
 # UPDATE MEMORY
-# ─────────────────────────────────────────────
+# ------------------------
 
 def update_memory(user_input, ai_output):
     global short_term_memory, long_term_memory
 
+    # STM
     short_term_memory.append(f"User: {user_input}")
     short_term_memory.append(f"AI: {ai_output}")
 
-    if is_important(user_input):
-        long_term_memory += f"\nUser Info: {user_input}"
+    # Structured LTM
+    category = classify_memory(user_input)
 
+    if category != "noise":
+        long_term_memory[category].append(user_input)
+
+    # Overflow → summary
     if len(short_term_memory) > MAX_STM:
-        overflow          = short_term_memory[:-MAX_STM]
-        long_term_memory += "\n" + "\n".join(overflow)
+        overflow = short_term_memory[:-MAX_STM]
+
+        long_term_memory["summary"] += "\n" + "\n".join(overflow)
+
         short_term_memory = short_term_memory[-MAX_STM:]
 
     save_memory()
 
 
-# ─────────────────────────────────────────────
-# BUILD HISTORY
-# ─────────────────────────────────────────────
+# ------------------------
+# BUILD CONTEXT
+# ------------------------
 
-def build_history(user_input: str = "") -> str:
-    history = ""
+def build_context(user_input=""):
 
-    # Bug fixed — now correctly injects retrieved summaries not long_term_memory
-    if user_input:
-        retrieved = retrieve_relevant(user_input)
-        if retrieved:
-            history += f"Relevant Past Memory:\n{retrieved}\n\n"
+    facts = "\n".join(long_term_memory["facts"])
+    preferences = "\n".join(long_term_memory["preferences"])
+    goals = "\n".join(long_term_memory["goals"])
+    summary = long_term_memory["summary"]
+    recent = "\n".join(short_term_memory)
 
-    # Bug fixed — long_term_memory now appears only once
-    if long_term_memory.strip():
-        history += f"Long Term Memory:\n{long_term_memory}\n\n"
+    # FAISS fallback (controlled)
+    archived = ""
+    if len(summary.strip()) < 50 and user_input:
+        archived = get_archived_insights(user_input)
 
-    if short_term_memory:
-        history += "Recent Conversation:\n"
-        history += "\n".join(short_term_memory)
+    return {
+        "facts": facts,
+        "preferences": preferences,
+        "goals": goals,
+        "summary": summary,
+        "recent": recent,
+        "archived": archived
+    }
 
-    return history.strip()
 
-
-# Auto-load on import
+# Auto-load
 load_memory()

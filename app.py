@@ -3,60 +3,103 @@ from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableSequence
-from memory_compression import should_compress, compress_memory, build_history, update_memory
 
-# Load env
+from memory_compression import (
+    should_compress,
+    compress_memory,
+    build_context,
+    update_memory
+)
+
+# ── ENV ──
 load_dotenv()
-
 api_key = os.getenv("GEMINI_API_KEY")
 
-# LLM
+# ── LLM ──
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     google_api_key=api_key
 )
 
-# Prompt template
+# ── PROMPT ──
 prompt = ChatPromptTemplate.from_template("""
-You are an AI assistant with memory.
+You are an AI assistant with long-term memory.
 
+Use the structured memory carefully.
 
-- You MUST use the provided conversation history.
-- If the user has shared personal information (like name, preferences, etc.), you MUST remember and use it.
-- DO NOT say "I don't remember" or "I don't have memory".
-- Always check history before answering.
+User Facts:
+{facts}
 
-Conversation History:
-{history}
+User Preferences:
+{preferences}
+
+User Goals:
+{goals}
+
+Summary of Past Interactions:
+{summary}
+
+Archived Insights:
+{archived}
+
+Recent Conversation:
+{recent}
+
+Instructions:
+- Prioritize facts and preferences
+- Maintain consistency
+- Use summary for long-term context
+- Use archived insights only if relevant
+- Avoid contradictions
 
 User: {input}
 AI:
 """)
 
-
-# Chain (modern LangChain)
 chain = prompt | llm
 
 print("🚀 AI Chatbot Started (type 'exit' to quit)")
 
 while True:
     user_input = input("You: ")
+
     if user_input.lower() == "exit":
         break
 
     try:
+        # Step 1: Compression BEFORE response
+        if should_compress():
+            compress_memory()
+
+        # Step 2: Build context
+        context = build_context(user_input)
+
+        # Safety fallback
+        for key in context:
+            if not context[key]:
+                context[key] = "None"
+
+        # Debug
+        print("\n[DEBUG] Context:")
+        print(context)
+        print()
+
+        # Step 3: Generate response
         response = chain.invoke({
-            "history": build_history(user_input),
+            "facts": context["facts"],
+            "preferences": context["preferences"],
+            "goals": context["goals"],
+            "summary": context["summary"],
+            "archived": context["archived"],
+            "recent": context["recent"],
             "input": user_input
         })
 
         reply = response.content
         print("Bot:", reply)
 
-        # Update memory
+        # Step 4: Update memory
         update_memory(user_input, reply)
-        if should_compress():
-            compress_memory()
+
     except Exception as e:
         print("⚠️ Error:", e)
