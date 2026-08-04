@@ -56,5 +56,16 @@ app/
 
 ---
 
+## ▶️ Running the project
+Use the workspace virtual environment for all Python commands:
+
+```bash
+cd /Users/idelta/llm-context-optimization
+source venv/bin/activate
+python memory_compression.py
+```
+
+VS Code is now configured to use this environment automatically for this workspace.
+
 ## 👨‍💻 Contributors
 - Team of 5 developers working on LLM optimization and memory compression

@@ -8,7 +8,8 @@ from memory_compression import (
     should_compress,
     compress_memory,
     build_context,
-    update_memory
+    update_memory,
+    count_ltm_tokens   
 )
 
 # ── ENV ──
@@ -49,7 +50,7 @@ Instructions:
 - Prioritize facts and preferences
 - Maintain consistency
 - Use summary for long-term context
-- Use archived insights only if relevant
+- Use archived insights only if highly relevant
 - Avoid contradictions
 
 User: {input}
@@ -60,6 +61,9 @@ chain = prompt | llm
 
 print("🚀 AI Chatbot Started (type 'exit' to quit)")
 
+turn = 0
+DEBUG = False
+
 while True:
     user_input = input("You: ")
 
@@ -67,11 +71,21 @@ while True:
         break
 
     try:
-        # Step 1: Compression BEFORE response
+        turn += 1
+        print(f"\n[Turn {turn}]")
+
+        # 🔥 Memory before compression
+        before = count_ltm_tokens()
+
+        # 🔥 Compression step
         if should_compress():
+            print("[App] Compression Triggered")
             compress_memory()
 
-        # Step 2: Build context
+        after = count_ltm_tokens()
+        print(f"[App] Memory tokens: {before} → {after}")
+
+        # 🔥 Build structured context
         context = build_context(user_input)
 
         # Safety fallback
@@ -79,12 +93,13 @@ while True:
             if not context[key]:
                 context[key] = "None"
 
-        # Debug
-        print("\n[DEBUG] Context:")
-        print(context)
-        print()
+        # Debug mode
+        if DEBUG:
+            print("\n[DEBUG CONTEXT]")
+            for k, v in context.items():
+                print(f"{k}:\n{v}\n")
 
-        # Step 3: Generate response
+        # 🔥 Generate response
         response = chain.invoke({
             "facts": context["facts"],
             "preferences": context["preferences"],
@@ -98,9 +113,8 @@ while True:
         reply = response.content
         print("Bot:", reply)
 
-        # Step 4: Update memory
+        # 🔥 Update memory AFTER response
         update_memory(user_input, reply)
 
     except Exception as e:
         print("⚠️ Error:", e)
-        
