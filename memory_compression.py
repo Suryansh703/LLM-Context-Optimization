@@ -102,6 +102,11 @@ def compress_memory():
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
 
+        import re
+
+        before = count_ltm_tokens()
+
+
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=os.getenv("GEMINI_API_KEY")
@@ -153,10 +158,38 @@ Input Memory:
         print("[Memory] Compression complete.")
 
     except Exception as e:
+
         print("⚠️ Compression Error:", e)
 
 
-# ------------------------
+
+        import traceback
+
+        print("\n========== COMPRESSION ERROR ==========")
+        traceback.print_exc()
+        print("=======================================\n")
+
+        print(f"Exception: {repr(e)}")
+        print("⚠️ Falling back to lightweight local compression")
+
+        fallback = build_fallback_compression(long_term_memory)
+
+        long_term_memory["facts"] = fallback["facts"]
+        long_term_memory["preferences"] = fallback["preferences"]
+        long_term_memory["goals"] = fallback["goals"]
+        long_term_memory["summary"] = fallback["summary"]
+
+        prune_memory()
+
+        try:
+            store_summary(json.dumps(long_term_memory))
+        except Exception as faiss_error:
+            print(f"⚠️ FAISS storage failed: {faiss_error}")
+
+        save_memory()
+
+# ─────────────────────────────────────────────
+>>>>>>> 895cd97 (Optimize LLM context management and evaluation workflow)
 # UPDATE MEMORY
 # ------------------------
 
